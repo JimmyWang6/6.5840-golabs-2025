@@ -14,6 +14,32 @@ import "strconv"
 // and reply for an RPC.
 //
 
+type RegisterArgs struct {
+}
+
+type RegisterReply struct {
+	WorkerID int
+	File     string
+}
+
+type ReportArgs struct {
+	WorkerID int
+	File     string
+}
+
+type ReportReply struct {
+	Response string
+	File     string
+}
+
+type HeartbeatArgs struct {
+	WorkerID int
+}
+
+type HeartbeatReply struct {
+	Response string
+}
+
 type ExampleArgs struct {
 	X int
 }
@@ -23,7 +49,6 @@ type ExampleReply struct {
 }
 
 // Add your RPC definitions here.
-
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.
