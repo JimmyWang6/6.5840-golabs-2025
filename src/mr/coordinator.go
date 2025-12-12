@@ -134,26 +134,30 @@ func (c *Coordinator) Heartbeat(args *HeartbeatArgs, reply *HeartbeatReply) erro
 	return nil
 }
 
-func scanWorkers(c *Coordinator) {
+func (c *Coordinator) scanWorkers() {
 	for {
 		time.Sleep(time.Second * 2)
 		c.mu.Lock()
 		now := time.Now()
 		for id, worker := range c.Workers {
 			if now.Sub(worker.LastSeen).Seconds() > 10 {
-				// regard this worker as dead
 				log.Printf("Worker %d is dead\n", worker.WorkerID)
-				delete(c.Workers, id)
-				for i := range c.Files {
-					file := &c.Files[i]
-					if file.Owner == worker.WorkerID && file.Done == false {
-						file.Assigned = false
-						file.Owner = -1
-					}
-				}
+				c.deleteWorker(id)
 			}
 		}
 		c.mu.Unlock()
+	}
+}
+
+func (c *Coordinator) deleteWorker(id int) {
+	worker := c.Workers[id]
+	delete(c.Workers, id)
+	for i := range c.Files {
+		file := &c.Files[i]
+		if file.Owner == worker.WorkerID && file.Done == false {
+			file.Assigned = false
+			file.Owner = -1
+		}
 	}
 }
 
@@ -203,7 +207,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		newFile[i] = cur
 	}
 	c := Coordinator{mu: sync.Mutex{}, Counter: 0, Files: newFile, NReduce: nReduce, Workers: make(map[int]*WorkerItem)}
-	go scanWorkers(&c)
+	go c.scanWorkers()
 	c.server()
 	return &c
 }
