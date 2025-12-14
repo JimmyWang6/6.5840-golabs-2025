@@ -2,4 +2,5 @@ pkg/
 *-handin.tar.gz
 .idea
 output
-.src/main/mr-*
+src/main/mr-*
+src/.DS_Store

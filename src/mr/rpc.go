@@ -31,7 +31,6 @@ type ReportArgs struct {
 type ReportReply struct {
 	Response string
 	File     File
-	Type     string
 }
 
 type HeartbeatArgs struct {

@@ -28,7 +28,7 @@ type Coordinator struct {
 
 type File struct {
 	Name     string
-	index    int
+	Index    int
 	Assigned bool
 	Done     bool
 	Owner    int
@@ -137,16 +137,19 @@ func (c *Coordinator) Report(args *ReportArgs, reply *ReportReply) error {
 				reply.Response = "wait"
 			}
 			return nil
+		} else {
+			reply.File = assigned
+			reply.Response = "doing"
+			return nil
 		}
 	}
 
 	// find and mark the file done if owned by this worker
 	for i := range c.Files {
 		file := &c.Files[i]
-		if file.index == fileIndex && file.Owner == id {
+		if file.Index == fileIndex && file.Owner == id {
 			file.Done = true
 			file.Assigned = true
-			log.Printf("Worker %d finished file %s\n", id, file.Name)
 			break
 		}
 	}
@@ -162,7 +165,6 @@ func (c *Coordinator) Report(args *ReportArgs, reply *ReportReply) error {
 		}
 		return nil
 	}
-	reply.Type = c.State
 	reply.File = assigned
 	reply.Response = "doing"
 	return nil
@@ -181,18 +183,18 @@ func (c *Coordinator) Heartbeat(args *HeartbeatArgs, reply *HeartbeatReply) erro
 }
 
 func (c *Coordinator) scanWorkers() {
-	//for {
-	//	time.Sleep(time.Second * 2)
-	//	c.mu.Lock()
-	//	now := time.Now()
-	//	for id, worker := range c.Workers {
-	//		if now.Sub(worker.LastSeen).Seconds() > 10 {
-	//			log.Printf("Worker %d is dead\n", worker.WorkerID)
-	//			c.deleteWorker(id)
-	//		}
-	//	}
-	//	c.mu.Unlock()
-	//}
+	for {
+		time.Sleep(time.Second * 2)
+		c.mu.Lock()
+		now := time.Now()
+		for id, worker := range c.Workers {
+			if now.Sub(worker.LastSeen).Seconds() > 10 {
+				log.Printf("Worker %d is dead\n", worker.WorkerID)
+				c.deleteWorker(id)
+			}
+		}
+		c.mu.Unlock()
+	}
 }
 
 func (c *Coordinator) deleteWorker(id int) {
@@ -255,7 +257,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		newFile[i] = cur
 		for j := 0; j < nReduce; j++ {
 			index := len + (i * nReduce) + j
-			cur := File{fmt.Sprintf("mr-%d-%d", i, j), index, false, true, -1, StateReduce}
+			cur := File{fmt.Sprintf("mr-%d-%d", i, j), index, false, false, -1, StateReduce}
 			newFile[index] = cur
 		}
 	}

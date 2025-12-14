@@ -1,11 +1,11 @@
 package mr
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 )
 import "log"
@@ -59,11 +59,10 @@ func Worker(mapf func(string, string) []KeyValue,
 		w.File = res.File
 		// here we would run the map or reduce task based on w.cur
 		// for simplicity, we just print it out
-		fmt.Printf("Worker %d processing file: %s\n", w.WorkerID, w.File.Name)
-		if res.Type == StateMap {
+		if w.File.Type == StateMap {
 			// run map task
 			contents := Read(w.File.Name)
-			prefix := fmt.Sprintf("mr-%d-", w.File.index)
+			prefix := fmt.Sprintf("mr-%d-", w.File.Index)
 			kva := mapf(w.File.Name, contents)
 
 			// 为当前这个 map 任务按 reduce index 创建/覆盖中间文件
@@ -86,8 +85,31 @@ func Worker(mapf func(string, string) []KeyValue,
 					log.Fatalf("cannot encode kv: %v", err)
 				}
 			}
-		} else if res.Type == StateReduce {
-			fmt.Printf("Worker %d processing file: %s\n", w.WorkerID, w.File.Name)
+		} else if w.File.Type == StateReduce {
+			f, _ := os.Open(w.File.Name)
+			dec := json.NewDecoder(f)
+			var kva []KeyValue
+			for {
+				var kv KeyValue
+				if err := dec.Decode(&kv); err != nil {
+					break
+				}
+				kva = append(kva, kv)
+			}
+			kvMap := make(map[string][]string)
+			for _, kv := range kva {
+				kvMap[kv.Key] = append(kvMap[kv.Key], kv.Value)
+			}
+			reduceIndex := strings.LastIndex(w.File.Name, "-")
+			suffix := w.File.Name[reduceIndex+1:]
+			out := fmt.Sprintf("mr-out-%s", suffix)
+			f, _ = os.OpenFile(out, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o666)
+			defer f.Close()
+			for k, v := range kvMap {
+				out := reducef(k, v)
+				result := fmt.Sprintf("%s %s\n", k, out)
+				f.WriteString(result)
+			}
 		}
 	}
 }
@@ -125,12 +147,11 @@ func register(w *WorkerItem) error {
 
 func report(w *WorkerItem) ReportReply {
 	args := ReportArgs{}
-	if &w.File == nil {
+	if w.File.Name == "" {
 		// first report, no file assigned yet
-		log.Printf("worker %d has no file", w.WorkerID)
 		args = ReportArgs{WorkerID: w.WorkerID, File: -1}
 	} else {
-		args = ReportArgs{WorkerID: w.WorkerID, File: w.File.index}
+		args = ReportArgs{WorkerID: w.WorkerID, File: w.File.Index}
 	}
 	reply := ReportReply{}
 	call("Coordinator.Report", &args, &reply)
