@@ -2,3 +2,4 @@ pkg/
 *-handin.tar.gz
 .idea
 output
+.src/main/mr-*

@@ -19,17 +19,19 @@ type RegisterArgs struct {
 
 type RegisterReply struct {
 	WorkerID int
-	File     string
+	NReduce  int
 }
 
 type ReportArgs struct {
 	WorkerID int
-	File     string
+	Type     int
+	File     int
 }
 
 type ReportReply struct {
 	Response string
-	File     string
+	File     File
+	Type     string
 }
 
 type HeartbeatArgs struct {
