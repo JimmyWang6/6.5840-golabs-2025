@@ -47,8 +47,6 @@ func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 
 func (c *Coordinator) Register(args *RegisterArgs, reply *RegisterReply) error {
 	_ = args
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	cur := c.Counter
 	c.Counter++
 	worker := &WorkerItem{WorkerID: cur, LastSeen: time.Now()}
@@ -137,8 +135,6 @@ func (c *Coordinator) allProcessed() bool {
 func (c *Coordinator) Report(args *ReportArgs, reply *ReportReply) error {
 	log.Printf("Report received from worker %d for file index %d\n", args.WorkerID, args.File)
 	defer log.Printf("Finished report for file index %d\n", args.File)
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	id := args.WorkerID
 	fileIndex := args.File
 	if fileIndex == -1 {
@@ -164,7 +160,7 @@ func (c *Coordinator) Report(args *ReportArgs, reply *ReportReply) error {
 	// find and mark the file done if owned by this worker
 	for i := range c.Files {
 		file := &c.Files[i]
-		if file.Index == fileIndex && file.Owner == id {
+		if file.Index == fileIndex && file.Owner == id && !file.Done {
 			log.Printf("File %s is already processed\n", file.Name)
 			file.Done = true
 			file.Assigned = true
@@ -190,8 +186,6 @@ func (c *Coordinator) Report(args *ReportArgs, reply *ReportReply) error {
 }
 
 func (c *Coordinator) Heartbeat(args *HeartbeatArgs, reply *HeartbeatReply) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	id := args.WorkerID
 	if w, ok := c.Workers[id]; ok {
 		w.LastSeen = time.Now()
@@ -205,7 +199,6 @@ func (c *Coordinator) Heartbeat(args *HeartbeatArgs, reply *HeartbeatReply) erro
 func (c *Coordinator) scanWorkers() {
 	for {
 		time.Sleep(time.Second * 10)
-		c.mu.Lock()
 		now := time.Now()
 		for id, worker := range c.Workers {
 			if now.Sub(worker.LastSeen).Seconds() > 10 {
@@ -213,7 +206,6 @@ func (c *Coordinator) scanWorkers() {
 				c.deleteWorker(id)
 			}
 		}
-		c.mu.Unlock()
 	}
 }
 

@@ -29,7 +29,7 @@ maybe_quiet() {
 }
 
 
-TIMEOUT=timeout
+TIMEOUT=""
 TIMEOUT2=""
 if timeout 2s sleep 1 > /dev/null 2>&1
 then
