@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
+	"sort"
 	"time"
 )
 import "log"
@@ -26,6 +26,7 @@ type encFile struct {
 type WorkerItem struct {
 	WorkerID int
 	NReduce  int
+	NMap     int
 	LastSeen time.Time
 	File     File
 }
@@ -47,12 +48,16 @@ func Worker(mapf func(string, string) []KeyValue,
 	// See runMapTask below for how to execute mapf on a given file.
 	var w = &WorkerItem{}
 	register(w)
+	go heartbeat(w)
 	for {
 		res := report(w)
+		log.Printf("Worker %d: received response: %+v\n", w.WorkerID, res)
 		if res.Response == "done" {
 			break
 		}
 		if res.Response == "wait" {
+			// no task assigned, wait and retry
+			w.File = File{Index: -1}
 			time.Sleep(2 * time.Second)
 			continue
 		}
@@ -60,6 +65,7 @@ func Worker(mapf func(string, string) []KeyValue,
 		// here we would run the map or reduce task based on w.cur
 		// for simplicity, we just print it out
 		if w.File.Type == StateMap {
+			fmt.Printf("Worker %d: starting map task %d on file %s\n", w.WorkerID, w.File.Index, w.File.Name)
 			// run map task
 			contents := Read(w.File.Name)
 			prefix := fmt.Sprintf("mr-%d-", w.File.Index)
@@ -67,13 +73,13 @@ func Worker(mapf func(string, string) []KeyValue,
 
 			// 为当前这个 map 任务按 reduce index 创建/覆盖中间文件
 			encFiles := make([]encFile, w.NReduce)
+			log.Printf("Worker %d: map task %d creating %d intermediate files\n", w.WorkerID, w.File.Index, w.NReduce)
 			for i := 0; i < w.NReduce; i++ {
 				fileName := fmt.Sprintf("%s%d", prefix, i)
 				f, err := os.Create(fileName) // 始终重新创建（MapReduce 规范：每个任务自己的文件）
 				if err != nil {
 					log.Fatalf("cannot create %v", fileName)
 				}
-				defer f.Close()
 				encFiles[i] = encFile{
 					file: f,
 					enc:  json.NewEncoder(f),
@@ -85,32 +91,56 @@ func Worker(mapf func(string, string) []KeyValue,
 					log.Fatalf("cannot encode kv: %v", err)
 				}
 			}
-		} else if w.File.Type == StateReduce {
-			f, _ := os.Open(w.File.Name)
-			dec := json.NewDecoder(f)
-			var kva []KeyValue
-			for {
-				var kv KeyValue
-				if err := dec.Decode(&kv); err != nil {
-					break
+			for _, ef := range encFiles {
+				if err := ef.file.Close(); err != nil {
+					log.Fatalf("cannot close file: %v", err)
 				}
-				kva = append(kva, kv)
 			}
-			kvMap := make(map[string][]string)
-			for _, kv := range kva {
-				kvMap[kv.Key] = append(kvMap[kv.Key], kv.Value)
+			log.Printf("Worker %d: map task %d produced %d key/value pairs\n", w.WorkerID, w.File.Index, len(kva))
+		} else if w.File.Type == StateReduce {
+			reduceIndex := w.File.Index - w.NMap
+			intermediate := []KeyValue{}
+			fmt.Printf("Worker %d: starting reduce task %d\n", w.WorkerID, reduceIndex)
+			for i := 0; i < w.NMap; i++ {
+				intermediateFileName := fmt.Sprintf("mr-%d-%d", i, reduceIndex)
+				_, err := os.Stat(intermediateFileName)
+				if os.IsNotExist(err) {
+					log.Fatalf("intermediate file %s does not exist", intermediateFileName)
+				}
+				f, _ := os.Open(intermediateFileName)
+				defer f.Close()
+				dec := json.NewDecoder(f)
+				for {
+					var kv KeyValue
+					if err := dec.Decode(&kv); err != nil {
+						break
+					}
+					intermediate = append(intermediate, kv)
+				}
 			}
-			reduceIndex := strings.LastIndex(w.File.Name, "-")
-			suffix := w.File.Name[reduceIndex+1:]
-			out := fmt.Sprintf("mr-out-%s", suffix)
-			f, _ = os.OpenFile(out, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o666)
-			defer f.Close()
-			for k, v := range kvMap {
-				out := reducef(k, v)
-				result := fmt.Sprintf("%s %s\n", k, out)
-				f.WriteString(result)
+			sort.Slice(intermediate, func(i, j int) bool {
+				return intermediate[i].Key < intermediate[j].Key
+			})
+			out := fmt.Sprintf("mr-out-%d", reduceIndex)
+			file, _ := os.OpenFile(out, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o666)
+			defer file.Close()
+			i := 0
+			for i < len(intermediate) {
+				j := i + 1
+				for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
+					j++
+				}
+				values := []string{}
+				for k := i; k < j; k++ {
+					values = append(values, intermediate[k].Value)
+				}
+				output := reducef(intermediate[i].Key, values)
+				result := fmt.Sprintf("%v %v\n", intermediate[i].Key, output)
+				file.WriteString(result)
+				i = j
 			}
 		}
+		log.Printf("Worker %d: completed task %+v\n", w.WorkerID, w.File)
 	}
 }
 
@@ -127,6 +157,21 @@ func Read(name string) string {
 	return string(data)
 }
 
+func heartbeat(w *WorkerItem) {
+	args := HeartbeatArgs{WorkerID: w.WorkerID}
+	reply := HeartbeatReply{}
+
+	for {
+		time.Sleep(3 * time.Second)
+		ok := call("Coordinator.Heartbeat", &args, &reply)
+		if ok {
+			w.LastSeen = time.Now()
+		} else {
+			log.Fatalf("Heartbeat call failed!\n")
+		}
+	}
+}
+
 // example function to show how to make an RPC call to the coordinator.
 //
 // the RPC argument and reply types are defined in rpc.go.
@@ -139,6 +184,7 @@ func register(w *WorkerItem) error {
 		// use reply.WorkerID and reply.UniqueKey
 		w.WorkerID = reply.WorkerID
 		w.NReduce = reply.NReduce
+		w.NMap = reply.NMap
 	} else {
 		log.Fatalf("Register call failed!\n")
 	}
@@ -154,7 +200,9 @@ func report(w *WorkerItem) ReportReply {
 		args = ReportArgs{WorkerID: w.WorkerID, File: w.File.Index}
 	}
 	reply := ReportReply{}
+	log.Printf("Worker %d: reporting completion of file %d\n", w.WorkerID, args.File)
 	call("Coordinator.Report", &args, &reply)
+	log.Printf("Report success!")
 	return reply
 }
 

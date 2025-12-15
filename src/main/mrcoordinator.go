@@ -9,7 +9,11 @@ package main
 // Please do not change this file.
 //
 
-import "6.5840/mr"
+import (
+	"log"
+
+	"6.5840/mr"
+)
 import "time"
 import "os"
 import "fmt"
@@ -24,6 +28,6 @@ func main() {
 	for m.Done() == false {
 		time.Sleep(time.Second)
 	}
-
-	time.Sleep(time.Second)
+	log.Printf("Coordinator started")
+	time.Sleep(10 * time.Second)
 }

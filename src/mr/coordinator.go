@@ -1,12 +1,12 @@
 package mr
 
 import (
-	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"net/rpc"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -55,6 +55,13 @@ func (c *Coordinator) Register(args *RegisterArgs, reply *RegisterReply) error {
 	// assign tasks while holding the lock
 	reply.WorkerID = cur
 	reply.NReduce = c.NReduce
+	count := 0
+	for i := range c.Files {
+		if c.Files[i].Type == StateMap {
+			count++
+		}
+	}
+	reply.NMap = count
 	c.Workers[cur] = worker
 	return nil
 }
@@ -80,6 +87,8 @@ func assign(w *WorkerItem, c *Coordinator) File {
 			}
 		}
 		if allDone {
+			log.Printf("Map phase finished, start reduce phase\n")
+			c.State = StateReduce
 			return doReduce(w, c)
 		}
 		return File{}
@@ -88,7 +97,6 @@ func assign(w *WorkerItem, c *Coordinator) File {
 }
 
 func doReduce(w *WorkerItem, c *Coordinator) File {
-	allDone := true
 	for i := range c.Files {
 		file := &c.Files[i]
 		if file.Type == StateReduce {
@@ -97,12 +105,17 @@ func doReduce(w *WorkerItem, c *Coordinator) File {
 				file.Owner = w.WorkerID
 				return *file
 			}
-			if !file.Done {
-				allDone = false
-			}
+		}
+	}
+	allDone := true
+	for i := range c.Files {
+		if c.Files[i].Type == StateReduce && !c.Files[i].Done {
+			allDone = false
+			break
 		}
 	}
 	if allDone {
+		log.Printf("All tasks finished\n")
 		c.State = StateFinish
 	}
 	return File{}
@@ -122,20 +135,24 @@ func (c *Coordinator) allProcessed() bool {
 }
 
 func (c *Coordinator) Report(args *ReportArgs, reply *ReportReply) error {
+	log.Printf("Report received from worker %d for file index %d\n", args.WorkerID, args.File)
+	defer log.Printf("Finished report for file index %d\n", args.File)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	id := args.WorkerID
 	fileIndex := args.File
-
 	if fileIndex == -1 {
 		// empty file name means first time request
+		log.Printf("File not found in worker %d\n", args.WorkerID)
 		assigned := assign(c.Workers[id], c)
 		if assigned.Name == "" {
 			if c.allFinished() {
 				reply.Response = "done"
 			} else {
 				reply.Response = "wait"
+				log.Printf("replying wait to worker, reply %d\n", args.WorkerID)
 			}
+			reply.File = File{}
 			return nil
 		} else {
 			reply.File = assigned
@@ -148,6 +165,7 @@ func (c *Coordinator) Report(args *ReportArgs, reply *ReportReply) error {
 	for i := range c.Files {
 		file := &c.Files[i]
 		if file.Index == fileIndex && file.Owner == id {
+			log.Printf("File %s is already processed\n", file.Name)
 			file.Done = true
 			file.Assigned = true
 			break
@@ -162,6 +180,7 @@ func (c *Coordinator) Report(args *ReportArgs, reply *ReportReply) error {
 			reply.Response = "done"
 		} else {
 			reply.Response = "wait"
+			reply.File = File{Index: -1}
 		}
 		return nil
 	}
@@ -177,6 +196,7 @@ func (c *Coordinator) Heartbeat(args *HeartbeatArgs, reply *HeartbeatReply) erro
 	if w, ok := c.Workers[id]; ok {
 		w.LastSeen = time.Now()
 	}
+	log.Printf("Heartbeat received from worker %d\n", id)
 	// TODO what happen if worker not found
 	reply.Response = "ok"
 	return nil
@@ -184,7 +204,7 @@ func (c *Coordinator) Heartbeat(args *HeartbeatArgs, reply *HeartbeatReply) erro
 
 func (c *Coordinator) scanWorkers() {
 	for {
-		time.Sleep(time.Second * 2)
+		time.Sleep(time.Second * 10)
 		c.mu.Lock()
 		now := time.Now()
 		for id, worker := range c.Workers {
@@ -236,32 +256,78 @@ func (c *Coordinator) server() {
 func (c *Coordinator) Done() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// 统计未完成任务
+	mapTotal, mapDone, mapAssigned := 0, 0, 0
+	reduceTotal, reduceDone, reduceAssigned := 0, 0, 0
+
 	for i := range c.Files {
-		if c.Files[i].Done == false {
-			return false
+		if c.Files[i].Type == StateMap {
+			mapTotal++
+			if c.Files[i].Done {
+				mapDone++
+			}
+			if c.Files[i].Assigned {
+				mapAssigned++
+			}
+		} else if c.Files[i].Type == StateReduce {
+			reduceTotal++
+			if c.Files[i].Done {
+				reduceDone++
+			}
+			if c.Files[i].Assigned {
+				reduceAssigned++
+			}
 		}
 	}
-	return true
+	isDone := c.allFinished()
+	log.Printf("========== Done() Check ==========\n")
+	log.Printf("State: %s\n", c.State)
+	log.Printf("Map    : Total=%d, Done=%d, Assigned=%d\n", mapTotal, mapDone, mapAssigned)
+	log.Printf("Reduce : Total=%d, Done=%d, Assigned=%d\n", reduceTotal, reduceDone, reduceAssigned)
+	log.Printf("AllFinished: %v\n", isDone)
+	log.Printf("===================================\n")
+	return c.allFinished()
 }
 
 // create a Coordinator.
 // main/mrcoordinator.go calls this function.
 // nReduce is the number of reduce tasks to use.
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
-	len := len(files)
-	total := len + len*nReduce
+	nMap := len(files)
+	total := nMap + nReduce
 	newFile := make([]File, total)
-	for i := range files {
-		str := files[i]
-		cur := File{str, i, false, false, -1, StateMap}
-		newFile[i] = cur
-		for j := 0; j < nReduce; j++ {
-			index := len + (i * nReduce) + j
-			cur := File{fmt.Sprintf("mr-%d-%d", i, j), index, false, false, -1, StateReduce}
-			newFile[index] = cur
+
+	for i := 0; i < nMap; i++ {
+		newFile[i] = File{
+			Name:     files[i],
+			Index:    i,
+			Assigned: false,
+			Done:     false,
+			Owner:    -1,
+			Type:     StateMap,
 		}
 	}
-	c := Coordinator{mu: sync.Mutex{}, State: StateMap, Counter: 0, Files: newFile, NReduce: nReduce, Workers: make(map[int]*WorkerItem)}
+
+	for k := 0; k < nReduce; k++ {
+		idx := k + nMap
+		newFile[idx] = File{
+			Name:     strconv.Itoa(k), // reduce task id as name
+			Index:    idx,
+			Assigned: false,
+			Done:     false,
+			Owner:    -1,
+			Type:     StateReduce,
+		}
+	}
+
+	c := Coordinator{
+		mu:      sync.Mutex{},
+		State:   StateMap,
+		Counter: 0,
+		Files:   newFile,
+		NReduce: nReduce,
+		Workers: make(map[int]*WorkerItem),
+	}
 	go c.scanWorkers()
 	c.server()
 	return &c

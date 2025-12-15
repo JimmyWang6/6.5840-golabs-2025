@@ -20,6 +20,7 @@ type RegisterArgs struct {
 type RegisterReply struct {
 	WorkerID int
 	NReduce  int
+	NMap     int
 }
 
 type ReportArgs struct {
