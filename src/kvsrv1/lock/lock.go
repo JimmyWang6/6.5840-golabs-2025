@@ -15,6 +15,7 @@ type Lock struct {
 	ck      kvtest.IKVClerk
 	version rpc.Tversion
 	l       string
+	name    string
 	// You may add code here
 }
 
@@ -24,7 +25,7 @@ type Lock struct {
 // Use l as the key to store the "lock state" (you would have to decide
 // precisely what the lock state is).
 func MakeLock(ck kvtest.IKVClerk, l string) *Lock {
-	lk := &Lock{ck: ck, l: l, version: 0}
+	lk := &Lock{ck: ck, l: "key", name: l, version: 0}
 	// You may add code here
 	return lk
 }
@@ -33,22 +34,35 @@ func (lk *Lock) Acquire() {
 	for {
 		res, version, err := lk.ck.Get(lk.l)
 		if err == rpc.OK {
-			if res == "acquire" {
+			if res != "" {
 				// other people hold the lock
 				continue
 			} else {
 				newVersion := version
-				e := lk.ck.Put(lk.l, "acquire", newVersion)
+				e := lk.ck.Put(lk.l, lk.name, newVersion)
 				if e == rpc.OK {
 					lk.version = newVersion
 					break
+				} else if e == rpc.ErrMaybe {
+					// need to check whether we have acquired the lock
+					res2, _, err2 := lk.ck.Get(lk.l)
+					if err2 == rpc.OK && res2 == lk.name {
+						lk.version = newVersion
+						break
+					}
 				}
 			}
 		} else {
 			// first time acquire the lock
-			e := lk.ck.Put(lk.l, "acquire", 0)
+			e := lk.ck.Put(lk.l, lk.name, 0)
 			if e == rpc.OK {
 				break
+			} else if e == rpc.ErrMaybe {
+				// need to check whether we have acquired the lock
+				res2, _, err2 := lk.ck.Get(lk.l)
+				if err2 == rpc.OK && res2 == lk.name {
+					break
+				}
 			}
 		}
 	}

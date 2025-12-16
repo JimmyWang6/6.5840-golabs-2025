@@ -21,14 +21,14 @@ const (
 )
 
 func oneClient(t *testing.T, me int, ck kvtest.IKVClerk, done chan struct{}) kvtest.ClntRes {
-	lk := MakeLock(ck, "l")
+	lk := MakeLock(ck, kvtest.RandValue(8))
 	ck.Put("l0", "", 0)
 	for i := 1; true; i++ {
 		select {
 		case <-done:
 			return kvtest.ClntRes{i, 0}
 		default:
-			//log.Printf("%d try to acquired lock", me)
+			log.Printf("%d try to acquired lock", me)
 			lk.Acquire()
 
 			log.Printf("%d: acquired lock", me)
@@ -55,10 +55,10 @@ func oneClient(t *testing.T, me int, ck kvtest.IKVClerk, done chan struct{}) kvt
 				t.Fatalf("%d: put failed %v", me, err)
 			}
 
-			//log.Printf("%d: release lock", me)
+			log.Printf("%d: release lock", me)
 
 			lk.Release()
-			//log.Printf("%d: release success", me)
+			log.Printf("%d: release success", me)
 		}
 	}
 	return kvtest.ClntRes{}
