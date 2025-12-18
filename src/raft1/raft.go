@@ -166,7 +166,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			// grant vote
 			rf.mu.Lock()
 			rf.voteFor = args.Candidate
-			rf.mu.Lock()
+			rf.mu.Unlock()
 			reply.VoteGranted = true
 		} else {
 			log.Printf("server %d in term %d rejected vote request from candidate %d in term %d due to log not up-to-date", rf.me, rf.term, args.Candidate, args.Term)
