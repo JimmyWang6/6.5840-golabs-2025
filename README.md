@@ -1,13 +1,14 @@
-# 6.5840 Go Labs 总览（Lab1 & Lab2）
+# 6.5840 Go Labs 总览（Lab1, Lab2 & Lab3A）
 
-A Go implementation of core labs from MIT 6.5840 (distributed systems), including a MapReduce framework and a versioned key/value server with a lock service.
+A Go implementation of core labs from MIT 6.5840 (distributed systems), including a MapReduce framework, a versioned key/value server with a lock service, and the Raft consensus algorithm.
 
 当前仓库主要包含：
 
 - **Lab1：MapReduce 分布式计算框架**
 - **Lab2：版本化 Key/Value 存储与基于 KV 的分布式锁**
+- **Lab3A：Raft 共识算法 - Leader 选举**
 
-代码主要位于 `src/` 目录，根目录下的 `Lab1-MapReduce-Design.md` 和 `Lab2-KVServer-Design.md` 是这两个实验的详细设计文档。
+代码主要位于 `src/` 目录，根目录下的 `Lab1-MapReduce-Design.md`、`Lab2-KVServer-Design.md` 和 `Lab3A-Raft-Leader-Election-Design.md` 是这些实验的详细设计文档。
 
 ---
 
@@ -32,6 +33,9 @@ A Go implementation of core labs from MIT 6.5840 (distributed systems), includin
 
     # 运行 Lab2 KV Server 相关测试
     go test ./kvsrv1
+
+    # 运行 Lab3A Raft Leader Election 测试
+    go test -run 3A ./raft1
     ```
 
   - MapReduce 也可以使用提供的脚本（在 `src/main/` 下）：
@@ -270,11 +274,201 @@ cd main
 
 ---
 
+## Lab3A：Raft 共识算法 - Leader 选举
+
+### 目标
+
+- 实现 **Raft 共识算法**的第一部分：**Leader 选举（Leader Election）**
+- 理解并实践：
+  - Raft 的三种角色：Follower、Candidate、Leader
+  - 基于 Term（任期）的选举机制
+  - 心跳（Heartbeat）机制维持 Leader 身份
+  - 网络分区下的选举行为和容错
+
+### 核心设计与架构
+
+**主要目录与文件：**
+
+- `src/raft1/`
+  - `raft.go`：Raft 核心实现（角色转换、选举、心跳）
+  - `server.go`：Raft 服务器接口封装
+  - `raft_test.go`：Leader 选举测试（TestInitialElection3A, TestReElection3A 等）
+  - `util.go`：调试工具函数
+
+**Raft 三种角色：**
+
+1. **Follower（跟随者）**
+   - 被动接收来自 Leader 和 Candidate 的 RPC
+   - 响应投票请求（RequestVote）
+   - 如果选举超时未收到心跳，转换为 Candidate
+
+2. **Candidate（候选人）**
+   - 发起选举，向其他服务器请求投票
+   - 如果获得**严格多数**（> n/2）的投票，成为 Leader
+   - 如果收到来自新 Leader 的心跳，转换为 Follower
+   - 如果选举超时，开始新一轮选举
+
+3. **Leader（领导者）**
+   - 定期发送心跳（空的 AppendEntries RPC���给所有 Follower
+   - 如果发现更高的 term，降级为 Follower
+   - 负责处理客户端请求和日志复制（Lab 3B）
+
+### 关键机制
+
+#### Term（任期）
+- 每个服务器维护一个 `currentTerm` 计数器
+- Term 单调递增，作为逻辑时钟
+- 服务器间通信时交换 term：
+  - 发现更高的 term → 立即更新并转换为 Follower
+  - 收到过期的 term → 拒绝请求
+
+#### 选举规则
+- **严格多数原则**：必须获得 **votes > n/2** 的投票才能成为 Leader
+- **每个 term 每个服务器只能投一票**
+- **先到先得**：在同一 term 中，第一个请求投票的 Candidate 获得投票
+
+#### 选举超时与心跳
+- **选举超时（Election Timeout）**：
+  - Follower 等待心跳的超时时间（如 150-300ms 随机）
+  - 超时后转换为 Candidate 并发起选举
+  - **随机化**避免多个服务器同时发起选举导致选票分散
+
+- **心跳机制**：
+  - Leader 定期发送空的 AppendEntries RPC
+  - 心跳间隔应**远小于**选举超时时间（如 50-150ms）
+  - 维持 Leader 身份，防止 Follower 超时
+
+### RPC 接口
+
+#### RequestVote RPC
+- **用途**：Candidate 请求投票
+- **参数**：
+  - `Term`：Candidate 的当前 term
+  - `CandidateId`：Candidate 的服务器 ID
+  - `LastLogIndex` / `LastLogTerm`：日志信息（Lab 3B）
+- **返回**：
+  - `Term`：接收者的 currentTerm
+  - `VoteGranted`：是否投票给 Candidate
+- **逻辑**：
+  - 拒绝过期 term 的请求
+  - 在当前 term 未投票且 Candidate 日志足够新时，投票并重置超时
+
+#### AppendEntries RPC
+- **用途**：Leader 发送日志条目或心跳
+- **参数**：
+  - `Term`：Leader 的当前 term
+  - `LeaderId`：Leader 的服务器 ID
+  - `Entries`：日志条目（心跳时为空）
+  - ��他日志一致性参数（Lab 3B）
+- **返回**：
+  - `Term`：接收者的 currentTerm
+  - `Success`：是否成功
+- **逻辑**（Lab 3A 简化版）：
+  - 拒绝过期 term 的请求
+  - 更新 term，转换为 Follower（如果是 Candidate），重置超时
+
+### 并发与锁管理
+
+- **互斥锁保护共享状态**：
+  - `rf.currentTerm`, `rf.role`, `rf.votedFor`, `rf.lastHeartbeat` 等
+  - 所有访问共享状态的代码必须持有锁
+
+- **避免死锁**：
+  - 发送 RPC 前释放锁（RPC 可能阻��）
+  - 先复制需要的状态，释放锁后再发送 RPC
+
+- **竞争检测**：
+  - 使用 `go test -race` 检测数据竞争
+  - 确保所有测试通过竞争检测
+
+### 关键实现要点
+
+1. **严格多数判断**：
+   ```go
+   if votes > len(rf.peers)/2 {  // 正确：严格多数
+       rf.becomeLeader()
+   }
+   ```
+
+2. **投票记录**：
+   - 使用 `votedFor` 记录每个 term 的投票
+   - 保证每个 term 只投一票
+
+3. **选举超时随机化**：
+   - 每个服务器的超时时间在一个范围内随机选择
+   - 避免选票分散，提高选举成功率
+
+4. **���跳定时发送**：
+   - Leader 启动独立 goroutine 定期发送心跳
+   - 收到更高 term 时停止心跳并降级
+
+### 测试说明
+
+#### TestInitialElection3A
+- 验证初始选举能选出一个 leader
+- 检查所有服务器 term 一致
+- 检查 leader 和 term 稳定
+
+#### TestReElection3A
+- 断开 leader 后能选出新 leader
+- 旧 leader 重连后转换为 follower
+- 网络分区无法形成多数派时没有 leader
+
+#### TestManyElections3A
+- 多次随机断开/连接服务器
+- 验证始终只有一个 leader
+- 检查系统稳定性
+
+**运行测试：**
+
+```bash
+cd src/raft1
+
+# 运行所有 3A 测试
+go test -run 3A
+
+# 带竞争检测
+go test -race -run 3A
+
+# 运行特定测试
+go test -run TestInitialElection3A
+
+# 重复运行检测不稳定性
+for i in {1..100}; do
+    go test -run TestReElection3A || break
+done
+```
+
+### 调试技巧
+
+- **日志输出**：在关键位置添加日志，追踪角色转换和投票过程
+- **竞争检测**：使��� `-race` 标志检测数据竞争
+- **可视化**：绘制时间线图观察选举过程
+- **DPrintf 函数**：使用条件编译的日志函数，方便调试时开关日志
+
+### 已实现能力摘要（Lab3A）
+
+- ✅ Raft 三种角色的转换逻辑（Follower ↔ Candidate ↔ Leader）
+- ✅ 基于 term 的选举机制
+- ✅ RequestVote 和 AppendEntries RPC 实现
+- ✅ 心跳机制维持 leader 身份
+- ✅ 选举超时随机化避免选票分散
+- ✅ 网络分区下的正确选举行为
+- ✅ 并发安全和数据竞争检测
+- ✅ 通过所有 Lab3A 测试用例
+
+### 设计文档
+
+详细设计请参考：[Lab3A-Raft-Leader-Election-Design.md](./Lab3A-Raft-Leader-Election-Design.md)
+
+---
+
 ## 仓库结构导览
 
 - 根目录
   - `Lab1-MapReduce-Design.md`：Lab1 详细设计文档
   - `Lab2-KVServer-Design.md`：Lab2 详细设计文档
+  - `Lab3A-Raft-Leader-Election-Design.md`：Lab3A 详细设计文档
   - `Makefile`：可能用于统一构建/测试
 - `src/`
   - `mr/`：MapReduce 核心实现（Coordinator / Worker / RPC / 测试）
@@ -293,8 +487,37 @@ cd main
   - 实现备份任务（backup tasks）减少慢任务影响
   - 任务调度中考虑数据本地性、Worker 历史性能等
   - 支持 Combiner 函数，减少中间数据规模
+
 - **KV Server & Lock（Lab2）**
   - 支持更多操作（Append、PutIf、事务等）
   - 在单机版本化 KV 上叠加复制和分片（对应后续 Raft / ShardKV 实验）
   - 优化锁服务（租约、超时、可重入等）
+
+- **Raft（Lab3A 已完成，Lab3B/3C/3D 待实现）**
+  - **Lab3B**：日志复制（Log Replication）
+    - 实现 AppendEntries 的完整日志同步逻辑
+    - 日志一致性检查和冲突解决
+    - 提交（commit）机制和状态机应用
+  - **Lab3C**：���久化（Persistence）
+    - 持久化 currentTerm、votedFor、log[]
+    - 崩溃恢复后正确重启
+  - **Lab3D**：日志压缩（Log Compaction / Snapshot）
+    - 实现快照机制减少日志大小
+    - InstallSnapshot RPC
+  - **后续**：将 Raft 集成到 KV Server（kvraft1）构建容错 KV 存储
+
+---
+
+## 参考资料
+
+- [MIT 6.5840 课程网站](https://pdos.csail.mit.edu/6.824/)
+- [Raft 论文](https://raft.github.io/raft.pdf)
+- [Raft 可视化动画](http://thesecretlivesofdata.com/raft/)
+- [MapReduce 论文](https://pdos.csail.mit.edu/6.824/papers/mapreduce.pdf)
+
+---
+
+## 许可与声明
+
+本仓库为 MIT 6.5840 课程学习项目，仅供学习交流使用。代码实现参考了课程提供的框架和测试用例。
 
