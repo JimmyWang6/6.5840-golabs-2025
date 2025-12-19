@@ -57,7 +57,8 @@ type Log struct {
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	var term int
 	var isleader bool
 	// Your code here (3A).
@@ -233,7 +234,6 @@ func (rf *Raft) transitTo(role string) {
 		rf.heartbeatCancel = cancel
 		// 启动心跳协程
 		go rf.sendHeartbeats(ctx)
-		rf.mu.Unlock()
 	} else {
 		if rf.heartbeatCancel != nil {
 			rf.heartbeatCancel()
@@ -280,6 +280,7 @@ func (rf *Raft) broadcastHeartbeat() {
 				rf.mu.Lock()
 				rf.term = reply.Term
 				rf.transitTo(Follower)
+				rf.mu.Unlock()
 			}
 		}(server)
 	}
@@ -441,9 +442,10 @@ func (rf *Raft) Elect() {
 			if reply.VoteGranted {
 				votes += 1
 				log.Printf("server %d in term %d has now %d/%d votes", rf.me, rf.term, votes, total)
-				if votes >= len(rf.peers)/2 {
+				if votes > len(rf.peers)/2 {
 					rf.mu.Lock()
 					rf.transitTo(Leader)
+					rf.mu.Unlock()
 					// should send initial empty AppendEntries RPCs (heartbeats) to each server
 					log.Printf("server %d becomes leader in term %d with majority votes %d/%d", rf.me, rf.term, votes, total)
 				}
@@ -478,9 +480,10 @@ func (rf *Raft) Elect() {
 			if voteGranted {
 				votes++
 				if votes > total/2 {
-					rf.mu.Lock()
 					if rf.term == currentTerm && rf.Role == Candidate {
+						rf.mu.Lock()
 						rf.transitTo(Leader)
+						rf.mu.Unlock()
 						return
 					}
 				}
