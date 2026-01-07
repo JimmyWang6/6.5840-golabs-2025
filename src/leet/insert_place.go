@@ -24,25 +24,3 @@ package leet
 //
 //输入: nums = [1,3,5,6], target = 7
 //输出: 4
-
-func searchInsert(nums []int, target int) int {
-	if len(nums) == 0 {
-		return 0
-	}
-	if len(nums) == 1 {
-		if nums[0] >= target {
-			return 0
-		} else {
-			return 1
-		}
-	}
-	for i := 1; i < len(nums); i++ {
-		if nums[i] > target {
-			return i - 1
-		}
-		if nums[i] == target || (nums[i] > target && nums[i] > nums[i-1]) {
-			return i
-		}
-	}
-	return len(nums)
-}

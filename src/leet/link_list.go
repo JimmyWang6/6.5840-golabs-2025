@@ -4,46 +4,36 @@ func isPalindrome(head *ListNode) bool {
 	if head == nil || head.Next == nil {
 		return true
 	}
+
 	slow, fast := head, head
 	for fast != nil && fast.Next != nil {
+		slow = slow.Next
 		fast = fast.Next.Next
-		slow = slow.Next
 	}
 
-	if fast == nil {
-		//偶数
-		// slow 开始为后半部分
-		cur := slow
-		slow = slow.Next
-		cur.Next = nil
-		// 反转
-		return reserve(head, slow)
-	} else {
-		cur := slow
-		slow = slow.Next
-		cur.Next = nil
-		return reserve(head, slow)
-	}
+	revHead := reverse(slow)
+	p1 := head
+	p2 := revHead
 
-}
-
-func reserve(head *ListNode, half *ListNode) bool {
-	cur := half
-	for {
-		pre := half
-		pre.Next = nil
-		half = half.Next
-		if half == nil {
-			break
-		}
-		half.Next = pre
-	}
-	for cur != nil && head != nil {
-		if cur.Val != head.Val {
+	for p2 != nil {
+		if p1.Val != p2.Val {
 			return false
 		}
-		cur = cur.Next
-		head = head.Next
+		p1 = p1.Next
+		p2 = p2.Next
 	}
 	return true
+}
+
+func reverse(head *ListNode) *ListNode {
+	var prev *ListNode // 前驱节点，初始为 nil
+	curr := head       // 当前节点
+
+	for curr != nil {
+		nextTemp := curr.Next
+		curr.Next = prev
+		prev = curr
+		curr = nextTemp
+	}
+	return prev
 }
