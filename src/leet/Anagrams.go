@@ -19,55 +19,42 @@ package leet
 //起始索引等于 2 的子串是 "ab", 它是 "ab" 的异位词。
 
 func findAnagrams(s string, p string) []int {
-	len1 := len(s)
-	len2 := len(p)
-	if len1 < len2 {
-		return []int{}
+	n, m := len(s), len(p)
+	if n < m {
+		return nil
 	}
-	if len1 == len2 {
-		if s == p {
-			return []int{0}
-		}
-	}
-	result := make([]int, 0)
-	res := make(map[byte]int)
-	for i := 0; i < len2; i++ {
-		res[p[i]]++
-	}
-	for i := 0; i < len2; i++ {
-		_, ok := res[s[i]]
-		if ok {
-			res[s[i]]--
-		}
-	}
-	for lp, rp := 0, len2-1; ; {
-		if allZero(res) {
-			// empty map means submap
-			result = append(result, lp)
-		}
-		_, lpOk := res[s[lp]]
-		if lpOk {
-			res[s[lp]]++
-		}
-		lp++
-		rp++
-		if rp == len1 {
-			break
-		}
-		//
-		_, rpOk := res[s[rp]]
-		if rpOk {
-			res[s[rp]]--
-		}
-	}
-	return result
-}
 
-func allZero(value map[byte]int) bool {
-	for _, v := range value {
-		if v != 0 {
-			return false
+	// 1. 使用数组代替 map，索引 0-25 对应 a-z
+	// pCount 记录目标 p 的字符分布
+	// sCount 记录当前窗口的字符分布
+	var pCount, sCount [26]int
+
+	// 2. 初始化：统计 p 的字符，以及 s 中前 m 个字符（第一个窗口）
+	for i := 0; i < m; i++ {
+		pCount[p[i]-'a']++
+		sCount[s[i]-'a']++
+	}
+
+	var result []int
+
+	// 3. 检查第一个窗口
+	// Go 语言的神奇之处：数组可以直接比较！
+	if sCount == pCount {
+		result = append(result, 0)
+	}
+
+	// 4. 开始滑动窗口
+	for i := m; i < n; i++ {
+		// 移入右边的新字符
+		sCount[s[i]-'a']++
+		// 移出左边的旧字符
+		sCount[s[i-m]-'a']--
+
+		// 再次比较两个数组是否相同
+		if sCount == pCount {
+			result = append(result, i-m+1) // 记录起始索引
 		}
 	}
-	return true
+
+	return result
 }
