@@ -13,30 +13,3 @@ package leet
 // val：一个表示 Node.val 的整数。
 // random_index：随机指针指向的节点索引（范围从 0 到 n-1）；如果不指向任何节点，则为  null 。
 // 你的代码 只 接受原链表的头节点 head 作为传入参数。
-type Node struct {
-	Val    int
-	Next   *Node
-	Random *Node
-}
-
-func copyRandomList(head *Node) *Node {
-	unfinish := make(map[*Node]*Node)
-	node := dfs(head, unfinish)
-	//already copy the Next pointer, then go through random pointer
-	return node
-}
-
-func dfs(head *Node, finish map[*Node]*Node) *Node {
-	if head == nil {
-		return nil
-	}
-	node, ok := finish[head]
-	if !ok {
-		cur := Node{Val: head.Val}
-		finish[head] = &cur
-		cur.Next = dfs(head.Next, finish)
-		cur.Random = dfs(head.Random, finish)
-		return &cur
-	}
-	return node
-}
